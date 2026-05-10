@@ -233,12 +233,20 @@ class MouseController:
             logger.error(f"Lỗi di chuyển chuột: {e}")
 
     def click_left(self) -> None:
-        """Thực hiện click chuột trái."""
+        """Thực hiện click chuột trái đơn."""
         try:
             pyautogui.click(button='left')
             logger.debug("Đã thực hiện click trái")
         except Exception as e:
             logger.error(f"Lỗi thực hiện click trái: {e}")
+
+    def double_click(self) -> None:
+        """Thực hiện click đúp chuột trái."""
+        try:
+            pyautogui.doubleClick(button='left')
+            logger.debug("Đã thực hiện click đúp trái")
+        except Exception as e:
+            logger.error(f"Lỗi thực hiện click đúp: {e}")
 
     def click_right(self) -> None:
         """Thực hiện click chuột phải."""
@@ -247,6 +255,31 @@ class MouseController:
             logger.debug("Đã thực hiện click phải")
         except Exception as e:
             logger.error(f"Lỗi thực hiện click phải: {e}")
+
+    def mouse_down(self) -> None:
+        """Nhấn và giữ chuột trái (bắt đầu kéo thả)."""
+        try:
+            pyautogui.mouseDown(button='left')
+            logger.debug("Đã nhấn giữ chuột trái")
+        except Exception as e:
+            logger.error(f"Lỗi nhấn giữ chuột: {e}")
+
+    def mouse_up(self) -> None:
+        """Thả chuột trái (kết thúc kéo thả)."""
+        try:
+            pyautogui.mouseUp(button='left')
+            logger.debug("Đã thả chuột trái")
+        except Exception as e:
+            logger.error(f"Lỗi thả chuột: {e}")
+
+    def release_all(self) -> None:
+        """Thả tất cả các nút chuột đang giữ. Dùng khi bàn tay rời khỏi camera."""
+        try:
+            pyautogui.mouseUp(button='left')
+            pyautogui.mouseUp(button='right')
+            logger.debug("Đã thả toàn bộ nút chuột")
+        except Exception as e:
+            logger.error(f"Lỗi thả toàn bộ chuột: {e}")
 
     def scroll(self, direction: str, amount: int = 3) -> None:
         """
@@ -273,12 +306,19 @@ class MouseController:
         Tham số:
             gesture_result: Từ điển từ GestureEngine.detect_gestures()
         """
+        # Click trái đơn
         if gesture_result.get("left_click"):
             self.click_left()
 
+        # Click đúp
+        if gesture_result.get("double_click"):
+            self.double_click()
+
+        # Click phải
         if gesture_result.get("right_click"):
             self.click_right()
 
+        # Cuộn (giữ lại để tương thích)
         scroll_info = gesture_result.get("scroll", {})
         if scroll_info.get("direction"):
             self.scroll(scroll_info["direction"], amount=3)

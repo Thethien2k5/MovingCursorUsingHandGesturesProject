@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 # Sửa lỗi mã hóa Unicode trên Windows console (cp1252 không hỗ trợ tiếng Việt)
-# Mở lại stdout/stderr với encoding UTF-8 rõ ràng, tránh dùng stream cũ
+# Mở lại stdout/stderr với encoding UTF-8
 if sys.platform == 'win32':
     sys.stdout = open(sys.stdout.fileno(), 'w', encoding='utf-8', errors='replace', closefd=False)
     sys.stderr = open(sys.stderr.fileno(), 'w', encoding='utf-8', errors='replace', closefd=False)
@@ -49,7 +49,7 @@ LINE_THICKNESS = 2
 CIRCLE_RADIUS = 4
 FINGERTIP_RADIUS = 6
 
-# Các kết nối ngón tay: mỗi ngón là danh sách ID điểm mốc từ cổ tay đến đầu ngón
+# Các kết nối ngón tay: từ cổ tay 0 -> các đầu ngón tay 4 8 12 16 20
 FINGER_CONNECTIONS = [
     [0, 1, 2, 3, 4],     # Ngón cái
     [0, 5, 6, 7, 8],     # Ngón trỏ
@@ -80,6 +80,7 @@ class CameraThread(threading.Thread):
         self.running = False
 
     def run(self) -> None:
+        ### ======= CAMERA ======= ###
         """Vòng lặp chính của luồng camera."""
         logger.info(f"Đang khởi động luồng camera (chỉ_số_thiết_bị: {self.camera_index})")
 
@@ -111,8 +112,6 @@ class CameraThread(threading.Thread):
             self.running = True
             frame_count = 0
             start_time = time.time()
-
-            logger.info("Luồng camera đang chạy. Nhấn 'q' trong cửa sổ camera để dừng.")
 
             while self.running:
                 ret, frame = cap.read()

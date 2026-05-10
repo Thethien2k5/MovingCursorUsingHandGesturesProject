@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class GestureMode(Enum):
-    """Chế độ cử chỉ hiện tại của bàn tay."""
+    # ======= Chế độ cử chỉ hiện tại của bàn tay =======
     NONE = auto()      # Không có bàn tay trong khung hình
     HOVER = auto()     # Rê chuột bình thường (di chuyển, không nhấn)
     SCROLL = auto()    # Cuộn chuột giữa (nắm đấm giữ 2s + di chuyển lên/xuống)

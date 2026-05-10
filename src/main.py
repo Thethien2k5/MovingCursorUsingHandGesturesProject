@@ -15,6 +15,7 @@ from typing import Dict, Optional
 
 import cv2
 import numpy as np
+import uvicorn
 
 # Sửa lỗi mã hóa Unicode trên Windows console (cp1252 không hỗ trợ tiếng Việt)
 # Mở lại stdout/stderr với encoding UTF-8
@@ -22,12 +23,15 @@ if sys.platform == 'win32':
     sys.stdout = open(sys.stdout.fileno(), 'w', encoding='utf-8', errors='replace', closefd=False)
     sys.stderr = open(sys.stderr.fileno(), 'w', encoding='utf-8', errors='replace', closefd=False)
 
-# Thêm src vào đường dẫn
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Thêm thư mục src vào đường dẫn để import các module nội bộ
+# (cần thiết khi chạy trực tiếp python src/main.py hoặc qua run.py)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.hand_tracker import HandTracker
 from core.gesture_engine import GestureEngine, GestureMode
 from core.mouse_controller import MouseController
+from shared_state import shared_state
+from web_server import app
 
 # Định cấu hình ghi nhật ký với định dạng chi tiết
 logging.basicConfig(
@@ -66,33 +70,35 @@ class CameraThread(threading.Thread):
     Lật ngang khung hình để tạo hiệu ứng gương tự nhiên.
     """
 
-    def __init__(self, queue: Queue, camera_index: int = 0) -> None:
+    def __init__(self, queue: Queue, camera_source: str = "0") -> None:
         """
         Khởi tạo luồng camera.
 
         Tham số:
             queue: Hàng đợi để đẩy kết quả theo dõi bàn tay vào
-            camera_index: Chỉ số thiết bị camera (thường là 0 cho mặc định)
+            camera_source: Nguồn camera ("0" cho laptop, URL HTTP cho điện thoại)
         """
         super().__init__(daemon=True, name="CameraThread")
         self.queue = queue
-        self.camera_index = camera_index
+        self.camera_source = camera_source
         self.running = False
 
     def run(self) -> None:
-        ### ======= CAMERA ======= ###
         """Vòng lặp chính của luồng camera."""
-        logger.info(f"Đang khởi động luồng camera (chỉ_số_thiết_bị: {self.camera_index})")
+        logger.info(f"Đang khởi động luồng camera (nguồn: {self.camera_source})")
 
         cap = None
         tracker = None
 
         try:
             # Khởi tạo camera
-            cap = cv2.VideoCapture(self.camera_index)
+            cap = cv2.VideoCapture(self.camera_source)
             if not cap.isOpened():
-                logger.error(f"Không mở được camera {self.camera_index}")
+                logger.error(f"Không mở được camera {self.camera_source}")
                 return
+            # Cập nhật trạng thái nguồn camera thành công
+            label = "Laptop" if self.camera_source.isdigit() else "Điện thoại"
+            shared_state.set_active_camera_source(self.camera_source, label)
 
             # Đặt thuộc tính camera để tối ưu hiệu năng
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -114,6 +120,28 @@ class CameraThread(threading.Thread):
             start_time = time.time()
 
             while self.running:
+                # ── Kiểm tra yêu cầu chuyển đổi nguồn camera ──────────
+                pending = shared_state.fetch_pending_camera_source()
+                if pending is not None:
+                    new_source, new_label = pending
+                    logger.info(f"Đang chuyển camera sang: {new_label} (source={new_source})")
+                    # Đóng camera cũ
+                    if cap is not None:
+                        cap.release()
+                    # Mở camera mới
+                    cap = cv2.VideoCapture(new_source)
+                    if cap.isOpened():
+                        self.camera_source = new_source
+                        shared_state.set_active_camera_source(new_source, new_label)
+                        logger.info(f"Đã chuyển camera thành công: {new_label}")
+                        # Đặt lại thuộc tính camera nếu là webcam (nguồn số)
+                        if new_source.isdigit():
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                            cap.set(cv2.CAP_PROP_FPS, 30)
+                    else:
+                        logger.error(f"Không mở được camera mới: {new_source}")
+
                 ret, frame = cap.read()
                 if not ret:
                     logger.warning("Không đọc được khung hình từ camera")
@@ -144,16 +172,29 @@ class CameraThread(threading.Thread):
 
                 frame_count += 1
 
+                # ── Mã hóa frame đã vẽ thành JPEG và gửi lên web ────────
+                # Thay thế cv2.imshow bằng cách nén ảnh JPEG và lưu vào
+                # shared_state để web server stream tới frontend
+                _, jpeg_bytes = cv2.imencode(
+                    ".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                )
+                shared_state.update_frame(jpeg_bytes.tobytes(), time.time())
+
+                # ── Cập nhật dữ liệu phát hiện bàn tay cho web ──────────
+                shared_state.update_hand_data(
+                    detected=result["detected"],
+                    landmarks=result.get("landmarks"),
+                    handedness=result.get("handedness"),
+                    confidence=result.get("confidence", 0.0),
+                )
+
                 # Ghi nhật ký FPS mỗi 30 khung hình
                 if frame_count % 30 == 0:
                     elapsed = time.time() - start_time
                     fps = frame_count / elapsed
                     logger.info(f"FPS camera: {fps:.2f}")
-
-                # Hiển thị cửa sổ camera với khung xương đã vẽ
-                cv2.imshow("Hand Tracker", display_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    self.running = False
+                    # Cập nhật FPS camera lên shared_state
+                    shared_state.update_stats(fps_camera=fps)
 
         except Exception as e:
             logger.error(f"Lỗi trong luồng camera: {e}")
@@ -163,7 +204,6 @@ class CameraThread(threading.Thread):
                 tracker.close()
             if cap:
                 cap.release()
-            cv2.destroyAllWindows()
             logger.info("Đã dừng luồng camera")
 
     @staticmethod
@@ -269,6 +309,14 @@ class MouseControlThread(threading.Thread):
                     # Gọi detect_gestures với None để đặt lại trạng thái engine
                     gesture_engine.detect_gestures([])
 
+                    # ── Cập nhật shared_state khi không có bàn tay ─────
+                    shared_state.update_gesture_status(
+                        mode="NONE",
+                        last_gesture=None,
+                        fist_hold=False,
+                        scroll_active=False,
+                    )
+
                     # Ghi nhật ký thống kê mỗi 100 khung hình
                     if frame_count % 100 == 0:
                         elapsed = time.time() - start_time
@@ -276,6 +324,11 @@ class MouseControlThread(threading.Thread):
                         detection_rate = (hand_detected_count / frame_count * 100) if frame_count > 0 else 0
                         logger.info(
                             f"Vòng điều khiển - FPS: {fps:.2f}, Tỉ lệ phát hiện bàn tay: {detection_rate:.1f}%"
+                        )
+                        # Cập nhật thống kê lên shared_state cho web
+                        shared_state.update_stats(
+                            fps_control=fps,
+                            detection_rate=detection_rate,
                         )
                     continue
 
@@ -307,6 +360,13 @@ class MouseControlThread(threading.Thread):
                 # ── Xử lý tín hiệu DỪNG ────────────────────────────────
                 if gesture_result.get("stop"):
                     logger.info(">>> NHẬN TÍN HIỆU DỪNG TỪ CỬ CHỈ <<<")
+                    # Cập nhật trạng thái dừng lên web trước khi thoát
+                    shared_state.update_gesture_status(
+                        mode="STOP",
+                        last_gesture="Dừng chương trình",
+                        fist_hold=False,
+                        scroll_active=False,
+                    )
                     # Báo hiệu dừng chương trình hoàn toàn
                     self.stop_event.set()
                     self.running = False
@@ -341,10 +401,24 @@ class MouseControlThread(threading.Thread):
                 mouse_controller.execute_gesture(gesture_result)
 
                 # ── Ghi nhật ký các cử chỉ được phát hiện ──────────────
+                last_gesture_name = None
                 if gesture_result.get("left_click"):
                     logger.info("Cử chỉ: Click Trái")
+                    last_gesture_name = "Click Trái"
                 if gesture_result.get("double_click"):
                     logger.info("Cử chỉ: Click Đúp")
+                    last_gesture_name = "Click Đúp"
+                if gesture_result.get("right_click"):
+                    last_gesture_name = "Click Phải"
+
+                # ── Cập nhật trạng thái cử chỉ lên shared_state cho web ─
+                scroll_active = (current_mode == GestureMode.SCROLL)
+                shared_state.update_gesture_status(
+                    mode=current_mode.name if current_mode else "NONE",
+                    last_gesture=last_gesture_name,
+                    fist_hold=gesture_result.get("fist_hold", False),
+                    scroll_active=scroll_active,
+                )
 
                 # Ghi nhật ký thống kê mỗi 100 khung hình
                 if frame_count % 100 == 0:
@@ -353,6 +427,11 @@ class MouseControlThread(threading.Thread):
                     detection_rate = (hand_detected_count / frame_count * 100) if frame_count > 0 else 0
                     logger.info(
                         f"Vòng điều khiển - FPS: {fps:.2f}, Tỉ lệ phát hiện bàn tay: {detection_rate:.1f}%"
+                    )
+                    # Cập nhật thống kê lên shared_state cho web
+                    shared_state.update_stats(
+                        fps_control=fps,
+                        detection_rate=detection_rate,
                     )
 
         except KeyboardInterrupt:
@@ -384,8 +463,8 @@ def main() -> int:
     # Tạo stop_event để dừng chương trình hoàn toàn khi nhận cử chỉ 5 ngón duỗi
     stop_event = threading.Event()
 
-    # Tạo và khởi động luồng camera
-    camera_thread = CameraThread(hand_data_queue, camera_index=0)
+    # Tạo và khởi động luồng camera (mặc định dùng camera laptop)
+    camera_thread = CameraThread(hand_data_queue, camera_source="0")
     camera_thread.start()
 
     # Cho luồng camera thời gian để khởi tạo
@@ -395,8 +474,33 @@ def main() -> int:
     control_thread = MouseControlThread(hand_data_queue, stop_event)
     control_thread.start()
 
+    # ── Khởi động Web Server trong luồng riêng (daemon) ───────────────
+    # Web server phục vụ giao diện frontend + stream video + WebSocket trạng thái
+    # Chạy trong luồng daemon nên khi chương trình chính thoát, server tự dừng
+    def run_web_server():
+        """Hàm chạy uvicorn với app FastAPI đã cấu hình."""
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="warning",  # Giảm log từ uvicorn để tránh nhiễu
+            access_log=False,
+        )
+
+    server_thread = threading.Thread(
+        target=run_web_server,
+        daemon=True,
+        name="WebServerThread",
+    )
+    server_thread.start()
+    logger.info("Web server đã khởi động tại http://localhost:8000")
+
     try:
-        logger.info("Engine lõi đang chạy. Duỗi 5 ngón để dừng, hoặc nhấn Ctrl+C.")
+        logger.info(
+            "Engine lõi đang chạy. "
+            "Mở trình duyệt http://localhost:8000 để xem giao diện. "
+            "Duỗi 5 ngón để dừng, hoặc nhấn Ctrl+C."
+        )
         # Giữ luồng chính tồn tại, kiểm tra tín hiệu dừng
         while not stop_event.is_set():
             time.sleep(0.5)
@@ -414,6 +518,7 @@ def main() -> int:
         camera_thread.join(timeout=5)
         control_thread.join(timeout=5)
 
+        # Web server là daemon thread, sẽ tự dừng khi chương trình chính thoát
         logger.info("=== Đã dừng Engine Lõi Chuột Ảo AI ===")
 
     return 0

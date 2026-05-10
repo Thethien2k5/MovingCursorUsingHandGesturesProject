@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Virtual Mouse - Điều Khiển Chuột Bằng Cử Chỉ Tay</title>
+    <style>
+        /* ── Reset & Base ──────────────────────────────────────── */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #58a6ff;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        /* ── Layout Chính ──────────────────────────────────────── */
+        .main-container {
+            display: flex;
+            gap: 20px;
+            max-width: 1200px;
+            width: 100%;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        /* ── Panel Video ────────────────────────────────────────── */
+        .video-panel {
+            flex: 1 1 640px;
+            min-width: 400px;
+            max-width: 720px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+
+        .video-panel .panel-header {
+            background: #21262d;
+            padding: 10px 16px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #8b949e;
+            border-bottom: 1px solid #30363d;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .video-panel .panel-header .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3fb950;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .video-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .video-container .no-signal {
+            position: absolute;
+            color: #484f58;
+            font-size: 1.2rem;
+            text-align: center;
+        }
+
+        /* ── Panel Trạng Thái ───────────────────────────────────── */
+        .status-panel {
+            flex: 0 0 320px;
+            min-width: 280px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .status-panel .panel-header {
+            background: #21262d;
+            padding: 10px 16px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #8b949e;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .status-content {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            flex: 1;
+        }
+
+        /* ── Card Trạng Thái ────────────────────────────────────── */
+        .status-card {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+
+        .status-card .card-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #8b949e;
+            margin-bottom: 8px;
+        }
+
+        .status-card .card-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #c9d1d9;
+        }
+
+        .status-card .card-detail {
+            font-size: 0.8rem;
+            color: #8b949e;
+            margin-top: 4px;
+        }
+
+        /* ── Indicator Nhận Diện ────────────────────────────────── */
+        .indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        .indicator.active { background: #3fb950; box-shadow: 0 0 8px #3fb950; }
+        .indicator.inactive { background: #da3633; }
+        .indicator.warning { background: #d29922; }
+
+        /* ── Badge Cử Chỉ Cuối ──────────────────────────────────── */
+        .gesture-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            background: #1f6feb22;
+            color: #58a6ff;
+            border: 1px solid #1f6feb44;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Bảng Thống Kê ──────────────────────────────────────── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .stat-item {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .stat-item .stat-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #58a6ff;
+        }
+
+        .stat-item .stat-label {
+            font-size: 0.7rem;
+            color: #8b949e;
+            margin-top: 2px;
+        }
+
+        /* ── Chỉ Dẫn Cử Chỉ ─────────────────────────────────────── */
+        .gesture-guide {
+            margin-top: auto;
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+
+        .gesture-guide .guide-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #8b949e;
+            margin-bottom: 8px;
+        }
+
+        .gesture-guide ul {
+            list-style: none;
+            font-size: 0.8rem;
+            color: #8b949e;
+            line-height: 1.8;
+        }
+
+        .gesture-guide ul li::before {
+            content: "▸ ";
+            color: #58a6ff;
+        }
+
+        /* ── Footer ─────────────────────────────────────────────── */
+        .footer {
+            margin-top: 16px;
+            font-size: 0.75rem;
+            color: #484f58;
+            text-align: center;
+        }
+
+        /* ── Responsive ─────────────────────────────────────────── */
+        @media (max-width: 768px) {
+            .main-container {
+                flex-direction: column;
+                align-items: center;
+            }
+            .status-panel {
+                flex: 1 1 auto;
+                width: 100%;
+                max-width: 640px;
+            }
+            .video-panel {
+                min-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>🖐️ AI Virtual Mouse</h1>
+
+    <div class="main-container">
+        <!-- Panel Video -->
+        <div class="video-panel">
+            <div class="panel-header" style="justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="dot"></span> Camera Feed
+                </div>
+                <select id="cameraSelect" style="background: #30363d; color: #c9d1d9; border: 1px solid #484f58; border-radius: 4px; padding: 4px 8px; font-size: 0.85rem;">
+                    <option value="0" selected>📷 Laptop</option>
+                    <option value="http://localhost:8080">📱 Điện thoại</option>
+                </select>
+            </div>
+            <div class="video-container">
+                <img id="videoFeed" src="/video" alt="Camera Feed"
+                     onerror="this.style.display='none'; document.getElementById('noSignal').style.display='block';"
+                     onload="this.style.display='block'; document.getElementById('noSignal').style.display='none';">
+                <div id="noSignal" class="no-signal">📷 Đang chờ tín hiệu camera...</div>
+            </div>
+        </div>
+
+        <!-- Panel Trạng Thái -->
+        <div class="status-panel">
+            <div class="panel-header">📊 Trạng Thái Hệ Thống</div>
+            <div class="status-content">
+
+                <!-- Card Nhận Diện Bàn Tay -->
+                <div class="status-card">
+                    <div class="card-title">🖐️ Nhận Diện Bàn Tay</div>
+                    <div class="card-value" id="handStatus">
+                        <span class="indicator inactive"></span> Không nhận diện
+                    </div>
+                    <div class="card-detail" id="handDetail">--</div>
+                </div>
+
+                <!-- Card Chế Độ Hiện Tại -->
+                <div class="status-card">
+                    <div class="card-title">🎯 Chế Độ Hiện Tại</div>
+                    <div class="card-value" id="modeStatus">--</div>
+                    <div class="card-detail" id="modeDetail"></div>
+                </div>
+
+                <!-- Card Cử Chỉ Cuối Cùng -->
+                <div class="status-card">
+                    <div class="card-title">⚡ Cử Chỉ Gần Nhất</div>
+                    <div class="card-value" id="lastGesture">
+                        <span style="color: #484f58;">Chưa có</span>
+                    </div>
+                </div>
+
+                <!-- Bảng Thống Kê -->
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFpsCamera">--</div>
+                        <div class="stat-label">FPS Camera</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFpsControl">--</div>
+                        <div class="stat-label">FPS Điều Khiển</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statDetectionRate">--</div>
+                        <div class="stat-label">Tỉ Lệ Nhận Diện</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statConnection">🔗</div>
+                        <div class="stat-label">Kết Nối WS</div>
+                    </div>
+                </div>
+
+                <!-- Chỉ Dẫn Cử Chỉ -->
+                <div class="gesture-guide">
+                    <div class="guide-title">📖 Hướng Dẫn Cử Chỉ</div>
+                    <ul>
+                        <li>1 ngón trỏ duỗi → Rê chuột</li>
+                        <li>Ngón trỏ co → duỗi nhanh → Click Trái</li>
+                        <li>Ngón cái co → duỗi → co → Click Phải</li>
+                        <li>Nắm đấm giữ 2s → Cuộn chuột</li>
+                        <li>5 ngón duỗi → Dừng chương trình</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        AI Virtual Mouse v2.0 | Kết nối WebSocket: <span id="wsIndicator">🟡 Đang kết nối...</span>
+    </div>
+
+    <script>
+        // ──────────────────────────────────────────────────────────
+        // KẾT NỐI WEBSOCKET - Nhận trạng thái thời gian thực
+        // ──────────────────────────────────────────────────────────
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/status`;
+        let ws = null;
+        let reconnectTimer = null;
+        let lastGestureTimeout = null;
+
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('[WS] Đã kết nối WebSocket');
+                document.getElementById('wsIndicator').innerHTML = '🟢 Đã kết nối';
+                document.getElementById('statConnection').textContent = '🟢';
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateUI(data);
+                } catch (e) {
+                    console.error('[WS] Lỗi parse JSON:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('[WS] WebSocket đóng, thử kết nối lại sau 3s...');
+                document.getElementById('wsIndicator').innerHTML = '🔴 Mất kết nối';
+                document.getElementById('statConnection').textContent = '🔴';
+                ws = null;
+                // Tự động reconnect sau 3 giây
+                if (!reconnectTimer) {
+                    reconnectTimer = setTimeout(connectWebSocket, 3000);
+                }
+            };
+
+            ws.onerror = (err) => {
+                console.error('[WS] Lỗi WebSocket:', err);
+            };
+        }
+
+        // ──────────────────────────────────────────────────────────
+        // CẬP NHẬT GIAO DIỆN TỪ DỮ LIỆU WEBSOCKET
+        // ──────────────────────────────────────────────────────────
+        function updateUI(data) {
+            const hand = data.hand || {};
+            const gesture = data.gesture || {};
+            const stats = data.stats || {};
+
+            // ── Trạng thái nhận diện bàn tay ──────────────────────
+            const handStatusEl = document.getElementById('handStatus');
+            const handDetailEl = document.getElementById('handDetail');
+            if (hand.detected) {
+                const handLabel = hand.handedness === 'Left' ? 'Trái' :
+                                  hand.handedness === 'Right' ? 'Phải' : '?';
+                handStatusEl.innerHTML = `<span class="indicator active"></span> Đã nhận diện`;
+                handDetailEl.textContent = `Tay ${handLabel} · Độ tin cậy: ${(hand.confidence * 100).toFixed(0)}%`;
+            } else {
+                handStatusEl.innerHTML = `<span class="indicator inactive"></span> Không nhận diện`;
+                handDetailEl.textContent = 'Đưa bàn tay vào khung hình';
+            }
+
+            // ── Chế độ hiện tại ──────────────────────────────────
+            const modeStatusEl = document.getElementById('modeStatus');
+            const modeDetailEl = document.getElementById('modeDetail');
+            const modeLabel = gesture.mode_label || '--';
+            modeStatusEl.textContent = modeLabel;
+
+            const modeIcons = {
+                'Không nhận diện': '⏸️',
+                'Rê chuột': '🖱️',
+                'Cuộn chuột': '📜',
+                'Dừng': '🛑',
+            };
+            const modeIcon = modeIcons[modeLabel] || '';
+            if (gesture.fist_hold) {
+                modeDetailEl.textContent = `${modeIcon} Đang giữ nắm đấm (đứng yên)`;
+            } else if (gesture.scroll_active) {
+                modeDetailEl.textContent = `${modeIcon} Di chuyển tay lên/xuống để cuộn`;
+            } else if (hand.detected) {
+                modeDetailEl.textContent = `${modeIcon} Di chuyển tay để rê chuột`;
+            } else {
+                modeDetailEl.textContent = '';
+            }
+
+            // ── Cử chỉ gần nhất ──────────────────────────────────
+            const lastGestureEl = document.getElementById('lastGesture');
+            if (gesture.last_gesture) {
+                const timeSince = gesture.last_gesture_time > 0
+                    ? ((Date.now() / 1000) - gesture.last_gesture_time).toFixed(1)
+                    : '?';
+                lastGestureEl.innerHTML = `<span class="gesture-badge">${gesture.last_gesture}</span>`;
+                // Tự động xóa badge sau 3 giây
+                if (lastGestureTimeout) clearTimeout(lastGestureTimeout);
+                lastGestureTimeout = setTimeout(() => {
+                    lastGestureEl.innerHTML = '<span style="color: #484f58;">Chưa có</span>';
+                }, 3000);
+            }
+
+            // ── Thống kê ─────────────────────────────────────────
+            document.getElementById('statFpsCamera').textContent = stats.fps_camera || '--';
+            document.getElementById('statFpsControl').textContent = stats.fps_control || '--';
+            document.getElementById('statDetectionRate').textContent =
+                stats.detection_rate != null ? `${stats.detection_rate}%` : '--';
+
+            // ── Cập nhật dropdown camera từ trạng thái backend ─────
+            if (data.camera) {
+                const camSelect = document.getElementById('cameraSelect');
+                if (camSelect && data.camera.source !== camSelect.value) {
+                    camSelect.value = data.camera.source;
+                }
+            }
+        }
+
+        // ── Khởi động kết nối WebSocket khi trang load ────────────
+        connectWebSocket();
+
+        // ── Định kỳ kiểm tra và reconnect nếu cần ─────────────────
+        setInterval(() => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                connectWebSocket();
+            }
+        }, 10000);
+
+        // ── Xử lý chuyển đổi camera ─────────────────────────────
+        document.getElementById('cameraSelect').addEventListener('change', function() {
+            const source = this.value;
+            const label = this.options[this.selectedIndex].text;
+            fetch('/api/switch-camera', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: source, label: label })
+            }).catch(err => console.error('Lỗi chuyển camera:', err));
+        });
+    </script>
+</body>
+</html>

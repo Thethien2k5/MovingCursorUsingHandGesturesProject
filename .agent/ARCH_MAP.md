@@ -9,7 +9,7 @@
 - **Ngôn ngữ/Framework:** Python 3 – thuần Python, không dùng framework web.
 - **Thị giác máy tính:** OpenCV (`opencv-python >= 4.8.0`) – đọc luồng camera, xử lý khung hình BGR, lật ngang tạo hiệu ứng gương, vẽ khung xương bàn tay.
 - **Theo dõi bàn tay:** MediaPipe Tasks API (`mediapipe >= 0.10.30`) – dùng HandLandmarker, tự động tải mô hình, trích xuất 21 điểm mốc.
-- **Điều khiển chuột:** PyAutoGUI (`pyautogui >= 0.9.54`) – di chuyển, click trái/phải, click đúp, nhấn giữ/thả chuột (mouseDown/Up), cuộn.
+- **Điều khiển chuột:** PyAutoGUI (`pyautogui >= 0.9.54`) – di chuyển, click trái, click đúp, cuộn.
 - **Xử lý tín hiệu:** Bộ lọc One Euro (tự triển khai) – làm mượt tọa độ, giảm rung lắc.
 - **Tính toán:** NumPy, Math (thư viện chuẩn).
 - **Đa luồng:** `threading.Thread` + `queue.Queue` – tách biệt luồng camera và luồng điều khiển.
@@ -22,8 +22,8 @@
   - `main.py`: **Điểm vào ứng dụng.** Điều phối hai luồng (Camera + Điều khiển Chuột), cấu hình logging, xử lý tín hiệu dừng. Vẽ khung xương bàn tay lên khung hình camera.
   - `core/`: Các module lõi của engine.
     - `hand_tracker.py`: Bao bọc MediaPipe Tasks API (HandLandmarker), tự động tải mô hình, trích xuất 21 điểm mốc, chuyển đổi tọa độ chuẩn hóa → tọa độ khung hình camera.
-    - `gesture_engine.py`: **Nhận dạng cử chỉ nâng cao.** Phát hiện 5 loại cử chỉ: dừng chương trình, kéo thả, rê chuột, click trái/đúp (qua chụm/thả ngón), click phải. Dùng máy trạng thái pinch, phát hiện ngón duỗi/co qua tỉ lệ khoảng cách, debounce và chống click liên tục.
-    - `mouse_controller.py`: Điều khiển chuột hệ thống qua PyAutoGUI. Triển khai ROI động, bộ lọc One Euro, sửa lỗi đảo ngược trục X (lật `1 - x_normalized`). Hỗ trợ: `move_mouse`, `click_left`, `double_click`, `click_right`, `mouse_down`, `mouse_up`, `release_all`, `scroll`.
+    - `gesture_engine.py`: **Nhận dạng cử chỉ nâng cao.** Phát hiện cử chỉ: dừng chương trình, rê chuột (1 ngón trỏ duỗi), click trái/đúp qua co/duỗi nhanh ngón trỏ hoặc ngón cái, nắm tay (đứng yên), cuộn chuột (nắm tay giữ 2 giây).
+    - `mouse_controller.py`: Điều khiển chuột hệ thống qua PyAutoGUI. Triển khai ROI động, bộ lọc One Euro.
   - `utils/`: Tiện ích (hiện tại để trống, sẵn sàng mở rộng).
 - `.agent/`: Thư mục chứa tài liệu kiến trúc cho AI (`ARCH_MAP.md`).
 - `requirements.txt`: Danh sách các gói Python phụ thuộc.
@@ -35,22 +35,23 @@
 - **HandTrackerResult:** `{ "detected": bool, "landmarks": list[tuple[int,int]] | None, "handedness": str | None, "confidence": float }`
   - Kết quả đầu ra của `HandTracker.process_frame()`. Mảng `landmarks` gồm 21 tuple (x, y) trong không gian khung hình camera (pixel), đã qua lật gương.
 
-- **GestureResult (mới):** `{ "mode": GestureMode, "left_click": bool, "double_click": bool, "right_click": bool, "stop": bool, "scroll": dict }`
-  - Kết quả đầu ra của `GestureEngine.detect_gestures()`. 
-  - `mode` thuộc enum `GestureMode`: `NONE`, `HOVER` (rê chuột), `DRAG` (kéo thả), `STOP` (dừng).
-  - Các sự kiện click được phát hiện qua máy trạng thái pinch (chụm/thả ngón cái + trỏ).
+- **GestureResult:** `{ "mode": GestureMode, "left_click": bool, "double_click": bool, "right_click": bool, "stop": bool, "scroll": dict, "fist_hold": bool }`
+  - Kết quả đầu ra của `GestureEngine.detect_gestures()`.
+  - `mode` thuộc enum `GestureMode`: `NONE`, `HOVER` (rê chuột), `SCROLL` (cuộn), `STOP` (dừng).
+  - `fist_hold`: True khi 5 ngón co (chưa đủ 2 giây) → chuột đứng yên.
+  - Click trái/đúp được phát hiện qua co/duỗi nhanh ngón trỏ hoặc ngón cái.
 
-- **GestureMode (Enum):** `NONE | HOVER | DRAG | STOP`
+- **GestureMode (Enum):** `NONE | HOVER | SCROLL | STOP`
   - `NONE`: Không có bàn tay.
-  - `HOVER`: Rê chuột bình thường, không nhấn nút nào.
-  - `DRAG`: Nắm đấm → giữ chuột trái, di chuyển để kéo thả.
+  - `HOVER`: Rê chuột bình thường, con trỏ di chuyển theo lòng bàn tay.
+  - `SCROLL`: Nắm đấm giữ 2 giây → cuộn chuột giữa (tay lên = cuộn xuống, tay xuống = cuộn lên).
   - `STOP`: 5 ngón duỗi → dừng chương trình ngay.
 
 - **QueueMessage:** `{ "timestamp": float, "frame": np.ndarray, "hand_result": HandTrackerResult }`
   - `frame` là khung hình đã lật gương và đã vẽ khung xương bàn tay.
 
-- **OneEuroFilter:** `{ "freq": float, "mincutoff": float, "beta": float, "dcutoff": float }`
-  - Bộ lọc thích ứng cho tín hiệu tọa độ X/Y. Tham số mặc định: `freq=120Hz`, `mincutoff=1.0Hz`, `beta=0.5`, `dcutoff=1.0Hz`.
+- **OneEuroFilter:** `{ "freq": 120Hz, "mincutoff": 1.0Hz, "beta": 0.5, "dcutoff": 1.0Hz }`
+  - Bộ lọc thích ứng cho tín hiệu tọa độ X/Y.
 
 - **Cấu hình ROI:** `{ "roi_width_ratio": 0.4, "roi_height_ratio": 0.4 }`
   - Vùng quan tâm chiếm 40% khung hình camera, làm neo di chuyển chuột.
@@ -77,40 +78,37 @@
 ┌─────────────────▼────────────────────────┐
 │  MouseControlThread (Main)               │
 │  - Lấy dữ liệu từ Queue                  │
-│  - Nếu không có tay: release_all() chuột │
+│  - Nếu không có tay: release_all()       │
 │  - Chạy GestureEngine.detect()           │
 │  - Xử lý chế độ:                         │
-│    • DRAG mới → mouse_down()             │
-│    • Thoát DRAG → mouse_up()             │
+│    • fist_hold → không di chuyển chuột   │
+│    • SCROLL → cuộn chuột theo delta Y    │
 │    • STOP → dừng luồng                   │
 │  - Gọi MouseController:                  │
-│    • move_mouse() + OneEuro + lật X      │
+│    • move_mouse() + OneEuro              │
 │    • click_left / double_click           │
-│    • click_right / scroll                │
+│    • scroll                              │
 │  - Ghi thống kê mỗi 100 khung            │
 └──────────────────────────────────────────┘
 ```
 
-### Luồng Nhận dạng Cử chỉ (mới)
+### Luồng Nhận dạng Cử chỉ
 
-1. `GestureEngine.detect_gestures(landmarks)` nhận 21 điểm mốc.
-2. **Xác định ngón duỗi/co:** So sánh tỉ lệ `dist(tip, wrist) / dist(pip, wrist)`. Nếu > `FINGER_EXTEND_RATIO` (0.88) → duỗi.
-3. **Dừng chương trình:** 5 ngón duỗi liên tiếp 5 khung hình → `mode=STOP, stop=True`.
-4. **Kéo thả:** 0 ngón duỗi (nắm đấm) → `mode=DRAG`. Khi chuyển sang DRAG: `mouse_down()`; khi rời DRAG: `mouse_up()`.
-5. **Rê chuột:** Ngón cái + trỏ duỗi, các ngón khác co → `mode=HOVER`.
-6. **Click trái/đúp:** Trong chế độ HOVER, máy trạng thái pinch phát hiện chụm (<40px) rồi thả (>55px):
-   - 2 lần thả trong 0.4s → click đúp.
-   - Sau click đúp, khóa 1.0s để tránh click liên tục.
-   - Debounce cơ bản 0.25s.
-7. **Click phải:** Ngón trỏ duỗi, ngón cái và các ngón khác co → `right_click=True` (debounce 0.5s).
+1. **Xác định ngón duỗi/co:** Tỉ lệ `dist(tip, wrist) / dist(pip, wrist) > 0.70` + kiểm tra trục Y (tip_y < pip_y) → duỗi. Ngón cái co khi khoảng cách đến INDEX_MCP < 70px.
+2. **Dừng chương trình:** 5 ngón duỗi liên tiếp 5 khung hình → `mode=STOP, stop=True`.
+3. **Nắm tay – Đứng yên:** 0 ngón duỗi → `fist_hold=True`, chuột không di chuyển. Giữ 2 giây → `mode=SCROLL`, cuộn chuột giữa.
+4. **Rê chuột:** Khi có bàn tay và không thuộc các trường hợp trên → `mode=HOVER`, chuột di chuyển theo lòng bàn tay.
+5. **Click trái (cách 1):** Ngón trỏ đang duỗi → co → duỗi trong vòng 0.4s → `left_click=True`. Hai lần liên tục trong 0.4s → `double_click=True`.
+6. **Click trái (cách 2):** Khi ngón trỏ duỗi, ngón cái co → duỗi → co trong 0.4s → `left_click=True`.
+7. **Debounce click:** 0.25s giữa các click đơn; cooldown 1.0s sau click đúp.
 
-### Luồng Điều khiển Chuột (đã cập nhật)
+### Luồng Điều khiển Chuột
 
-1. Tọa độ ngón trỏ → giới hạn trong ROI (40% khung hình trung tâm).
-2. Chuẩn hóa về 0-1 → **Lật trục X**: `x_screen = (1 - x_normalized) * screen_width` để khắc phục đảo ngược trái-phải do camera không gương.
-3. Áp dụng bộ lọc One Euro trên từng trục X, Y (nếu bật `smoothing_enabled`).
-4. Gọi `pyautogui.moveTo()` với tọa độ đã lọc.
-5. Khi không phát hiện bàn tay: gọi `release_all()` để thả mọi nút chuột đang giữ.
+1. Tọa độ lòng bàn tay (midpoint cổ tay – khớp ngón giữa) → giới hạn trong ROI.
+2. Chuẩn hóa về 0-1 → ánh xạ sang tọa độ màn hình (`x_screen = x_normalized * screen_width`).
+3. Áp dụng bộ lọc One Euro để làm mượt.
+4. Gọi `pyautogui.moveTo()` (chỉ khi không ở chế độ SCROLL hoặc fist_hold).
+5. Khi không phát hiện bàn tay: gọi `release_all()` để thả mọi nút chuột.
 
 ---
 
@@ -128,7 +126,8 @@
 
 ## 6. Nhật ký Thay đổi & Lộ trình
 
-- `[2026-05-09]` - `[Tái cấu trúc]`: **Đại tu hệ thống cử chỉ.** Viết lại `gesture_engine.py`: thêm `GestureMode` enum, phát hiện 5 ngón duỗi → dừng chương trình, nắm đấm → kéo thả, ngón cái+trỏ → rê chuột, chụm/thả ngón → click trái/đúp (máy trạng thái pinch, debounce 0.25s, cửa sổ click đúp 0.4s, cooldown 1.0s), ngón trỏ đơn → click phải. Cập nhật `mouse_controller.py`: thêm `mouse_down()`, `mouse_up()`, `double_click()`, `release_all()`; sửa lỗi đảo ngược trái-phải bằng cách lật `x_screen = (1 - x_normalized) * screen_width`. Cập nhật `main.py`: lật ngang khung hình camera (`cv2.flip`), vẽ khung xương bàn tay (đường nối xanh, chấm khớp vàng, đầu ngón đỏ), xử lý chuyển đổi chế độ DRAG (mouse_down/up), xử lý tín hiệu STOP, thả chuột khi bàn tay rời camera.
-- `[2026-05-09]` - `[Sửa lỗi]`: Chuyển từ API `mp.solutions` sang MediaPipe Tasks API (HandLandmarker) do mediapipe>=0.10.30 đã loại bỏ solutions; thêm tự động tải mô hình hand_landmarker.task; dùng `mp.Image` để tránh lỗi `_image_ptr`; sửa ánh xạ tọa độ (dùng kích thước khung hình camera thay vì kích thước màn hình) để khắc phục lỗi chuột nhảy về góc dưới trái; cập nhật requirements.txt lên `mediapipe>=0.10.30`.
-- `[2026-05-08]` - `[Khởi tạo]`: AI thực hiện quét toàn bộ dự án, dịch tất cả comment sang tiếng Việt, và tạo bản đồ hệ thống.
-- `[2026-05-06]` - `[Khởi tạo]`: Hoàn thành triển khai 5 giai đoạn của engine (theo IMPLEMENTATION_SUMMARY.md).
+- `[2026-05-10]` - `[Tái cấu trúc]`: **Thay đổi hoàn toàn cách nhận diện cử chỉ.** Xóa pinch-to-click, thêm click qua co/duỗi nhanh ngón trỏ (extend → curl → extend) và ngón cái (curl → extend → curl). Nắm tay (0 ngón duỗi) lập tức dừng di chuyển chuột; giữ 2 giây → cuộn chuột giữa. Chế độ rê chuột mặc định khi có bàn tay. Cập nhật `gesture_engine.py` với máy trạng thái mới, `main.py` xóa log chuột phải, cập nhật `ARCH_MAP.md`.
+- `[2026-05-09]` - `[Tái cấu trúc]`: **Đại tu hệ thống cử chỉ lần 1.** Viết lại `gesture_engine.py`: thêm `GestureMode` enum, phát hiện dừng, kéo thả, rê chuột, pinch-click, click phải. Cập nhật `mouse_controller.py` (mouse_down/up, double_click), `main.py` (flip camera, vẽ skeleton).
+- `[2026-05-09]` - `[Sửa lỗi]`: Chuyển từ API `mp.solutions` sang MediaPipe Tasks API (HandLandmarker); tự động tải mô hình; sửa lỗi `_image_ptr`; sửa ánh xạ tọa độ.
+- `[2026-05-08]` - `[Khởi tạo]`: AI quét dự án, dịch comment sang tiếng Việt, tạo bản đồ hệ thống.
+- `[2026-05-06]` - `[Khởi tạo]`: Hoàn thành triển khai 5 giai đoạn của engine.

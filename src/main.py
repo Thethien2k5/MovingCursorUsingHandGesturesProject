@@ -322,9 +322,10 @@ class MouseControlThread(threading.Thread):
                     else:
                         # Tính delta Y so với vị trí trước đó để xác định hướng cuộn
                         delta_y = palm_center[1] - self._scroll_base_y
-                        if abs(delta_y) > 10:  # Ngưỡng kích hoạt cuộn (pixel)
-                            direction = "down" if delta_y > 0 else "up"
-                            amount = max(1, int(abs(delta_y) / 20))  # 20px = 1 bước cuộn
+                        if abs(delta_y) > 5:  # Ngưỡng kích hoạt cuộn (pixel)
+                            # Tay đi xuống → cuộn lên, tay đi lên → cuộn xuống
+                            direction = "up" if delta_y > 0 else "down"
+                            amount = max(2, int(abs(delta_y) / 10))  # 10px = 1 bước cuộn, tối thiểu 2 bước
                             mouse_controller.scroll(direction, amount)
                             self._scroll_base_y = palm_center[1]  # Cập nhật gốc
                 elif prev_mode == GestureMode.SCROLL:
@@ -333,8 +334,9 @@ class MouseControlThread(threading.Thread):
 
                 prev_mode = current_mode
 
-                # ── Di chuyển chuột (bám theo lòng bàn tay) ────────────
-                mouse_controller.move_mouse(palm_center, timestamp)
+                # ── Di chuyển chuột (bám theo lòng bàn tay, đứng yên khi cuộn hoặc nắm tay) ──
+                if current_mode != GestureMode.SCROLL and not gesture_result.get("fist_hold"):
+                    mouse_controller.move_mouse(palm_center, timestamp)
 
                 # ── Thực thi lệnh chuột dựa trên cử chỉ ────────────────
                 mouse_controller.execute_gesture(gesture_result)
@@ -344,8 +346,6 @@ class MouseControlThread(threading.Thread):
                     logger.info("Cử chỉ: Click Trái")
                 if gesture_result.get("double_click"):
                     logger.info("Cử chỉ: Click Đúp")
-                if gesture_result.get("right_click"):
-                    logger.info("Cử chỉ: Click Phải")
 
                 # Ghi nhật ký thống kê mỗi 100 khung hình
                 if frame_count % 100 == 0:

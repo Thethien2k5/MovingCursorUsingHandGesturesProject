@@ -1,7 +1,7 @@
 """
 Engine Nhận dạng Cử chỉ Bàn tay.
 Phát hiện cử chỉ và chuyển đổi thành các sự kiện điều khiển chuột.
-Hỗ trợ: rê chuột, cuộn chuột, click trái/phải, click đúp, dừng chương trình.
+Hỗ trợ: rê chuột, cuộn chuột, click trái, click đúp, dừng chương trình.
 """
 
 import logging
@@ -17,7 +17,7 @@ class GestureMode(Enum):
     """Chế độ cử chỉ hiện tại của bàn tay."""
     NONE = auto()      # Không có bàn tay trong khung hình
     HOVER = auto()     # Rê chuột bình thường (di chuyển, không nhấn)
-    SCROLL = auto()    # Cuộn chuột giữa (nắm đấm di chuyển lên/xuống)
+    SCROLL = auto()    # Cuộn chuột giữa (nắm đấm giữ 2s + di chuyển lên/xuống)
     STOP = auto()      # Tín hiệu dừng chương trình
 
 
@@ -26,11 +26,12 @@ class GestureEngine:
     Nhận dạng cử chỉ bàn tay và kích hoạt các sự kiện chuột tương ứng.
 
     Các cử chỉ được hỗ trợ:
-    - 5 ngón duỗi thẳng → Dừng chương trình ngay lập tức
-    - 5 ngón nắm thành nắm đấm → Cuộn chuột giữa lên/xuống
-    - Ngón cái + ngón trỏ duỗi (các ngón khác co) → Rê chuột bình thường
-    - Ngón cái + ngón trỏ chụm lại rồi thả ra nhanh → Click trái (có thể click đúp)
-    - Ngón cái co, ngón trỏ duỗi → Click phải
+    - Chỉ có 1 ngón trỏ duỗi → Rê chuột bình thường
+    - Ngón trỏ duỗi → co nhanh → duỗi = Click trái (2 lần = click đúp)
+    - Ngón trỏ duỗi + ngón cái co → duỗi → co = Click phải
+    - Cả 5 ngón co → Chuột đứng yên tại chỗ
+    - Cả 5 ngón co + giữ 2 giây → Cuộn chuột giữa lên/xuống
+    - 5 ngón duỗi thẳng → Dừng chương trình
     """
 
     # ── ID các điểm mốc bàn tay MediaPipe ──────────────────────────────
@@ -67,9 +68,10 @@ class GestureEngine:
     ]
 
     # ── Ngưỡng phát hiện (pixel) ───────────────────────────────────────
-    PINCH_THRESHOLD = 40           # Khoảng cách tối đa coi là chụm ngón
-    PINCH_RELEASE_THRESHOLD = 55   # Khoảng cách tối thiểu coi là thả ngón
-    FINGER_EXTEND_RATIO = 0.88     # Tỉ lệ dist(tip,wrist)/dist(pip,wrist) để coi là duỗi
+    FINGER_EXTEND_RATIO = 0.70     # Tỉ lệ dist(tip,wrist)/dist(pip,wrist) để coi là duỗi
+
+    # ── Ngưỡng phát hiện ngón cái co (pixel) ───────────────────────────
+    THUMB_CURLED_THRESHOLD = 70    # Khoảng cách tối đa từ đầu ngón cái đến khớp ngón trỏ để coi là co
 
     # ── Thời gian debounce (giây) ──────────────────────────────────────
     CLICK_DEBOUNCE = 0.25          # Debounce cơ bản cho click đơn
@@ -80,28 +82,43 @@ class GestureEngine:
     # ── Ngưỡng khung hình cho cử chỉ dừng (tránh kích hoạt nhầm) ──────
     STOP_FRAME_THRESHOLD = 5       # Số khung hình liên tiếp cần giữ 5 ngón duỗi
 
+    # ── Thời gian giữ nắm đấm để vào chế độ cuộn ──────────────────────
+    SCROLL_HOLD_TIME = 2.0         # Giây
+
+    # ── Thời gian tối đa để coi là click nhanh ─────────────────────────
+    QUICK_CLICK_WINDOW = 0.4       # Giây (phải hoàn thành co-duỗi trong khoảng này)
+
     def __init__(self) -> None:
         """Khởi tạo engine nhận dạng cử chỉ với đầy đủ trạng thái."""
-        # ── Trạng thái máy pinch (phát hiện click qua chụm/thả ngón) ──
-        self._pinch_state: str = "idle"  # idle → pinching → (click khi thả)
-
         # ── Lịch sử click để phát hiện click đúp ───────────────────────
         self._click_times: List[float] = []
 
-        # ── Bộ đếm thời gian debounce ──────────────────────────────────
-        self._last_right_click_time: float = 0.0
-
         # ── Bộ đếm khung hình cho cử chỉ dừng ──────────────────────────
         self._stop_frame_count: int = 0
+
+        # ── Bộ đếm thời gian cho chế độ cuộn (nắm đấm) ────────────────
+        self._scroll_hold_start: float = 0.0
+
+        # ── Trạng thái trước đó của ngón trỏ và ngón cái (để phát hiện co/duỗi) ──
+        self._prev_index_ext: bool = False
+        self._prev_thumb_curled: bool = False
+
+        # ── Thời điểm ngón trỏ co lại gần nhất (để phát hiện click nhanh) ──
+        self._index_curled_time: float = 0.0
+
+        # ── Thời điểm ngón cái duỗi ra gần nhất (để phát hiện click thay thế) ──
+        self._thumb_extended_time: float = 0.0
+
+        # ── Thời điểm click phải gần nhất (debounce) ──────────────────────
+        self._last_right_click_time: float = 0.0
 
         # ── Chế độ hiện tại ────────────────────────────────────────────
         self._current_mode: GestureMode = GestureMode.NONE
 
         logger.info(
-            "Khởi tạo GestureEngine: NGƯỠNG_CHỤM=%dpx, NGƯỠNG_THẢ=%dpx, "
-            "TỈ_LỆ_DUỖI=%.2f, KHUNG_DỪNG=%d",
-            self.PINCH_THRESHOLD, self.PINCH_RELEASE_THRESHOLD,
+            "Khởi tạo GestureEngine: TỈ_LỆ_DUỖI=%.2f, KHUNG_DỪNG=%d, GIỮ_CUỘN=%.1fs",
             self.FINGER_EXTEND_RATIO, self.STOP_FRAME_THRESHOLD,
+            self.SCROLL_HOLD_TIME,
         )
 
     # ────────────────────────────────────────────────────────────────────
@@ -122,7 +139,8 @@ class GestureEngine:
             - 'double_click': bool - sự kiện click đúp
             - 'right_click': bool - sự kiện click phải
             - 'stop': bool - tín hiệu dừng chương trình
-            - 'scroll': dict - giữ lại để tương thích (hiện không dùng)
+            - 'scroll': dict - giữ lại để tương thích
+            - 'fist_hold': bool - True khi đang nắm tay (dừng di chuyển chuột)
         """
         result = {
             "mode": GestureMode.NONE,
@@ -131,6 +149,7 @@ class GestureEngine:
             "right_click": False,
             "stop": False,
             "scroll": {"direction": None, "magnitude": 0},
+            "fist_hold": False,
         }
 
         # ── Không có bàn tay → đặt lại toàn bộ trạng thái ──────────────
@@ -140,7 +159,7 @@ class GestureEngine:
 
         current_time = time.time()
 
-        # ── Bước 1: Xác định ngón nào đang duỗi ────────────────────────
+        # ── Bước 1: Xác định ngón nào đang duỗi và ngón cái co ─────────
         fingers_extended = self._get_extended_fingers(landmarks)
         num_extended = sum(fingers_extended)
 
@@ -149,6 +168,8 @@ class GestureEngine:
         middle_ext = fingers_extended[2]
         ring_ext = fingers_extended[3]
         pinky_ext = fingers_extended[4]
+
+        thumb_curled = self._is_thumb_curled(landmarks)
 
         # ── Bước 2: Phát hiện 5 ngón duỗi → DỪNG CHƯƠNG TRÌNH ──────────
         if num_extended == 5:
@@ -162,53 +183,121 @@ class GestureEngine:
         else:
             self._stop_frame_count = 0
 
-        # ── Bước 3: Phát hiện nắm đấm (0 ngón duỗi) → CUỘN CHUỘT ─────
+        # ── Bước 3: Phát hiện nắm đấm (0 ngón duỗi) → ĐỨNG YÊN / CUỘN ─
         if num_extended == 0:
-            result["mode"] = GestureMode.SCROLL
-            self._current_mode = GestureMode.SCROLL
-            logger.debug("Chế độ cuộn chuột (nắm đấm)")
-            # Khi đang cuộn, không phát hiện các cử chỉ khác
+            # Bắt đầu hoặc tiếp tục đếm thời gian giữ nắm đấm
+            if self._scroll_hold_start == 0.0:
+                self._scroll_hold_start = current_time
+                logger.debug(f"Bắt đầu đếm giữ nắm đấm ({self.SCROLL_HOLD_TIME}s)")
+            elif current_time - self._scroll_hold_start >= self.SCROLL_HOLD_TIME:
+                # Đủ 2 giây → chế độ cuộn chuột
+                result["mode"] = GestureMode.SCROLL
+                self._current_mode = GestureMode.SCROLL
+                logger.debug("Chế độ cuộn chuột (nắm đấm)")
+                # Reset trạng thái click để tránh click khi thoát cuộn
+                self._prev_index_ext = False
+                self._prev_thumb_curled = False
+                self._index_curled_time = 0.0
+                self._thumb_extended_time = 0.0
+                return result
+
+            # Chưa đủ 2 giây → đứng yên, không di chuyển chuột
+            result["mode"] = GestureMode.HOVER
+            self._current_mode = GestureMode.HOVER
+            result["fist_hold"] = True
             return result
+        else:
+            # Không còn nắm đấm → đặt lại bộ đếm giữ
+            self._scroll_hold_start = 0.0
 
-        # ── Bước 4: Phát hiện ngón cái + ngón trỏ duỗi, các ngón khác co → RÊ CHUỘT ──
-        only_index_thumb = (
-            thumb_ext and index_ext
-            and not middle_ext and not ring_ext and not pinky_ext
-        )
+        # ── Bước 4: Chế độ rê chuột (HOVER) ────────────────────────────
+        # Mặc định có bàn tay là rê chuột
+        result["mode"] = GestureMode.HOVER
+        self._current_mode = GestureMode.HOVER
 
-        if only_index_thumb:
-            result["mode"] = GestureMode.HOVER
-            self._current_mode = GestureMode.HOVER
+        # ── Phát hiện click trái qua co/duỗi ngón trỏ ─────────────────
+        # Ngón trỏ: đang duỗi → co → duỗi trong QUICK_CLICK_WINDOW = click
+        if self._prev_index_ext and not index_ext:
+            # Ngón trỏ vừa co lại → ghi nhận thời điểm
+            self._index_curled_time = current_time
+        elif not self._prev_index_ext and index_ext:
+            # Ngón trỏ vừa duỗi ra → kiểm tra có phải click nhanh không
+            if self._index_curled_time > 0.0:
+                elapsed = current_time - self._index_curled_time
+                if 0.05 < elapsed < self.QUICK_CLICK_WINDOW:
+                    # Click nhanh hợp lệ
+                    self._index_curled_time = 0.0
+                    self._register_click(current_time, result)
+                else:
+                    self._index_curled_time = 0.0
 
-            # Phát hiện click qua chụm/thả ngón cái + ngón trỏ
-            thumb_tip = landmarks[self.THUMB_TIP]
-            index_tip = landmarks[self.INDEX_TIP]
-            pinch_dist = self._calculate_distance(thumb_tip, index_tip)
+        # ── Phát hiện click trái qua co/duỗi ngón cái (thay thế) ─────
+        # Chỉ hoạt động khi ngón trỏ đang duỗi
+        # Ngón cái: đang co → duỗi → co trong QUICK_CLICK_WINDOW = click
+        if index_ext:
+            if self._prev_thumb_curled and not thumb_curled:
+                # Ngón cái vừa duỗi ra → ghi nhận thời điểm
+                self._thumb_extended_time = current_time
+            elif not self._prev_thumb_curled and thumb_curled:
+                # Ngón cái vừa co lại → kiểm tra có phải click không
+                if self._thumb_extended_time > 0.0:
+                    elapsed = current_time - self._thumb_extended_time
+                    if 0.05 < elapsed < self.QUICK_CLICK_WINDOW:
+                        # Click phải hợp lệ (ngón cái co → duỗi → co)
+                        self._thumb_extended_time = 0.0
+                        if current_time - self._last_right_click_time >= self.RIGHT_CLICK_DEBOUNCE:
+                            self._last_right_click_time = current_time
+                            result["right_click"] = True
+                            logger.info("Cử chỉ: Click Phải (ngón cái co → duỗi → co)")
+                    else:
+                        self._thumb_extended_time = 0.0
+        else:
+            # Nếu ngón trỏ không duỗi, đặt lại trạng thái ngón cái
+            self._thumb_extended_time = 0.0
 
-            click_info = self._detect_pinch_click(pinch_dist, current_time)
-            result["left_click"] = click_info["left_click"]
-            result["double_click"] = click_info["double_click"]
-
-        # ── Bước 5: Phát hiện ngón cái co + ngón trỏ duỗi → CLICK PHẢI ─
-        only_index = (
-            index_ext and not thumb_ext
-            and not middle_ext and not ring_ext and not pinky_ext
-        )
-
-        if only_index:
-            result["mode"] = GestureMode.HOVER
-            self._current_mode = GestureMode.HOVER
-            if current_time - self._last_right_click_time >= self.RIGHT_CLICK_DEBOUNCE:
-                self._last_right_click_time = current_time
-                result["right_click"] = True
-                logger.info("Cử chỉ: Click Phải (ngón cái co, ngón trỏ duỗi)")
-
-        # ── Bước 6: Mặc định → RÊ CHUỘT nếu có bàn tay ─────────────────
-        if result["mode"] == GestureMode.NONE:
-            result["mode"] = GestureMode.HOVER
-            self._current_mode = GestureMode.HOVER
+        # ── Cập nhật trạng thái trước đó ───────────────────────────────
+        self._prev_index_ext = index_ext
+        self._prev_thumb_curled = thumb_curled
 
         return result
+
+    # ────────────────────────────────────────────────────────────────────
+    # ĐĂNG KÝ CLICK (XỬ LÝ CLICK ĐƠN / CLICK ĐÚP)
+    # ────────────────────────────────────────────────────────────────────
+
+    def _register_click(self, current_time: float, result: Dict) -> None:
+        """
+        Ghi nhận một lần click và xác định click đơn hay click đúp.
+        """
+        # Debounce cơ bản
+        if self._click_times:
+            time_since_last = current_time - self._click_times[-1]
+            if time_since_last < self.CLICK_DEBOUNCE:
+                return
+
+        # Kiểm tra cooldown sau click đúp
+        if self._click_times and len(self._click_times) >= 2:
+            last_two = self._click_times[-2:]
+            if len(last_two) == 2 and (last_two[1] - last_two[0]) <= self.DOUBLE_CLICK_WINDOW:
+                time_since_double = current_time - last_two[1]
+                if time_since_double < self.DOUBLE_CLICK_COOLDOWN:
+                    return
+
+        # Ghi nhận click
+        self._click_times.append(current_time)
+        # Dọn dẹp lịch sử cũ
+        self._click_times = [t for t in self._click_times if current_time - t < 2.0]
+
+        # Kiểm tra click đúp
+        if len(self._click_times) >= 2:
+            interval = self._click_times[-1] - self._click_times[-2]
+            if interval <= self.DOUBLE_CLICK_WINDOW:
+                result["double_click"] = True
+                logger.info("Cử chỉ: Click Đúp!")
+                return
+
+        result["left_click"] = True
+        logger.debug("Cử chỉ: Click Trái (co/duỗi ngón)")
 
     # ────────────────────────────────────────────────────────────────────
     # PHÁT HIỆN NGÓN DUỖI
@@ -217,12 +306,6 @@ class GestureEngine:
     def _get_extended_fingers(self, landmarks: List[Tuple[int, int]]) -> List[bool]:
         """
         Xác định từng ngón có đang duỗi thẳng hay không.
-
-        Nguyên lý: So sánh khoảng cách từ đầu ngón đến cổ tay với khoảng cách
-        từ khớp giữa (PIP/IP) đến cổ tay. Nếu đầu ngón xa cổ tay hơn đáng kể
-        (vượt ngưỡng FINGER_EXTEND_RATIO), ngón đó đang duỗi.
-        Cách này hoạt động ổn định với nhiều góc nghiêng bàn tay khác nhau,
-        không phụ thuộc vào hướng tuyệt đối của trục Y.
         """
         wrist = landmarks[self.WRIST]
         extended = []
@@ -231,10 +314,14 @@ class GestureEngine:
             tip = landmarks[tip_id]
             pip = landmarks[pip_id]
 
+            # Đối với các ngón dài (không phải ngón cái), kiểm tra thêm trục Y
+            if tip_id != self.THUMB_TIP and tip[1] >= pip[1]:
+                extended.append(False)
+                continue
+
             dist_tip_wrist = self._calculate_distance(tip, wrist)
             dist_pip_wrist = self._calculate_distance(pip, wrist)
 
-            # Tránh chia cho 0 khi khớp trùng cổ tay (không xảy ra thực tế)
             if dist_pip_wrist < 1.0:
                 extended.append(False)
                 continue
@@ -245,70 +332,15 @@ class GestureEngine:
         return extended
 
     # ────────────────────────────────────────────────────────────────────
-    # PHÁT HIỆN CLICK QUA CHỤM/THẢ NGÓN (PINCH)
+    # PHÁT HIỆN NGÓN CÁI CO
     # ────────────────────────────────────────────────────────────────────
 
-    def _detect_pinch_click(self, pinch_distance: float, current_time: float) -> Dict:
-        """
-        Phát hiện sự kiện click thông qua cử chỉ chụm và thả ngón cái + ngón trỏ.
-
-        Máy trạng thái đơn giản:
-            idle ──(khoảng cách < PINCH_THRESHOLD)──▶ pinching
-            pinching ──(khoảng cách > PINCH_RELEASE_THRESHOLD)──▶ idle + click!
-
-        Hỗ trợ click đúp: nếu 2 lần click xảy ra trong DOUBLE_CLICK_WINDOW,
-        gộp thành click đúp. Sau click đúp, áp dụng DOUBLE_CLICK_COOLDOWN
-        để tránh click liên tục gây lỗi.
-        """
-        result = {"left_click": False, "double_click": False}
-
-        if self._pinch_state == "idle":
-            # Bắt đầu chụm ngón: khoảng cách giảm xuống dưới ngưỡng
-            if pinch_distance < self.PINCH_THRESHOLD:
-                self._pinch_state = "pinching"
-
-        elif self._pinch_state == "pinching":
-            # Thả ngón: khoảng cách tăng lên trên ngưỡng thả
-            if pinch_distance > self.PINCH_RELEASE_THRESHOLD:
-                self._pinch_state = "idle"
-
-                # ── Kiểm tra debounce cơ bản ───────────────────────────
-                if self._click_times:
-                    time_since_last = current_time - self._click_times[-1]
-                    if time_since_last < self.CLICK_DEBOUNCE:
-                        return result  # Bỏ qua, quá gần lần click trước
-
-                # ── Kiểm tra cooldown sau click đúp ────────────────────
-                if self._click_times and len(self._click_times) >= 2:
-                    # Nếu 2 lần click gần nhất đã tạo thành click đúp
-                    last_two = self._click_times[-2:]
-                    if len(last_two) == 2 and (last_two[1] - last_two[0]) <= self.DOUBLE_CLICK_WINDOW:
-                        time_since_double = current_time - last_two[1]
-                        if time_since_double < self.DOUBLE_CLICK_COOLDOWN:
-                            return result  # Đang trong thời gian chờ sau click đúp
-
-                # ── Ghi nhận thời điểm click ───────────────────────────
-                self._click_times.append(current_time)
-
-                # Dọn dẹp lịch sử cũ (> 2 giây) để tránh rò rỉ bộ nhớ
-                self._click_times = [
-                    t for t in self._click_times
-                    if current_time - t < 2.0
-                ]
-
-                # ── Phát hiện click đúp ────────────────────────────────
-                if len(self._click_times) >= 2:
-                    interval = self._click_times[-1] - self._click_times[-2]
-                    if interval <= self.DOUBLE_CLICK_WINDOW:
-                        result["double_click"] = True
-                        logger.info("Cử chỉ: Click Đúp!")
-                        return result
-
-                # ── Click đơn ──────────────────────────────────────────
-                result["left_click"] = True
-                logger.debug("Cử chỉ: Click Trái (chụm/thả ngón)")
-
-        return result
+    def _is_thumb_curled(self, landmarks: List[Tuple[int, int]]) -> bool:
+        """Xác định ngón cái có đang co lại hay không."""
+        thumb_tip = landmarks[self.THUMB_TIP]
+        index_mcp = landmarks[self.INDEX_MCP]
+        distance = self._calculate_distance(thumb_tip, index_mcp)
+        return distance < self.THUMB_CURLED_THRESHOLD
 
     # ────────────────────────────────────────────────────────────────────
     # TIỆN ÍCH
@@ -316,8 +348,14 @@ class GestureEngine:
 
     def _reset_state(self) -> None:
         """Đặt lại toàn bộ trạng thái khi không phát hiện thấy bàn tay."""
-        self._pinch_state = "idle"
+        self._click_times.clear()
         self._stop_frame_count = 0
+        self._scroll_hold_start = 0.0
+        self._prev_index_ext = False
+        self._prev_thumb_curled = False
+        self._index_curled_time = 0.0
+        self._thumb_extended_time = 0.0
+        self._last_right_click_time = 0.0
         self._current_mode = GestureMode.NONE
 
     @property

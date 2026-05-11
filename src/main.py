@@ -238,6 +238,8 @@ class MouseControlThread(threading.Thread):
 
         # ── Neo cho chế độ cuộn chuột (nắm đấm) ─────────────────────────
         self._scroll_base_y: float = 0.0
+        # ── Thời điểm hết chặn click sau khi thoát cuộn ──────────────────
+        self._click_block_until: float = 0.0
 
         try:
             while self.running:
@@ -324,12 +326,13 @@ class MouseControlThread(threading.Thread):
                         if abs(delta_y) > 5:  # Ngưỡng kích hoạt cuộn (pixel)
                             # Tay đi xuống → cuộn lên, tay đi lên → cuộn xuống
                             direction = "up" if delta_y > 0 else "down"
-                            amount = max(2, int(abs(delta_y) / 10))  # 10px = 1 bước cuộn, tối thiểu 2 bước
+                            amount = max(2, int(abs(delta_y) / 0.5))  # 3px = 1 bước cuộn (gấp 3 lần), tối thiểu 2 bước
                             mouse_controller.scroll(direction, amount)
                             self._scroll_base_y = palm_center[1]  # Cập nhật gốc
                 elif prev_mode == GestureMode.SCROLL:
                     # Thoát chế độ cuộn
                     logger.info("Chế độ: Thoát cuộn chuột")
+                    self._click_block_until = time.time() + 2.0  # Chặn click 2 giây sau khi thoát
 
                 prev_mode = current_mode
 
@@ -337,8 +340,9 @@ class MouseControlThread(threading.Thread):
                 if current_mode != GestureMode.SCROLL and not gesture_result.get("fist_hold"):
                     mouse_controller.move_mouse(palm_center, timestamp)
 
-                # ── Thực thi lệnh chuột dựa trên cử chỉ ────────────────
-                mouse_controller.execute_gesture(gesture_result)
+                # ── Thực thi lệnh chuột dựa trên cử chỉ (chặn click khi cuộn và 2s sau thoát) ──
+                if current_mode != GestureMode.SCROLL and time.time() >= self._click_block_until:
+                    mouse_controller.execute_gesture(gesture_result)
 
                 # ── Ghi nhật ký các cử chỉ được phát hiện ──────────────
                 if gesture_result.get("left_click"):

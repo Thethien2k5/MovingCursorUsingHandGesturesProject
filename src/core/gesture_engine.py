@@ -121,9 +121,8 @@ class GestureEngine:
             self.SCROLL_HOLD_TIME,
         )
 
-    # ────────────────────────────────────────────────────────────────────
-    # GIAO DIỆN CHÍNH
-    # ────────────────────────────────────────────────────────────────────
+
+    # ===================  # GIAO DIỆN CHÍNH ===================
 
     def detect_gestures(self, landmarks: List[Tuple[int, int]]) -> Dict:
         """
@@ -159,7 +158,7 @@ class GestureEngine:
 
         current_time = time.time()
 
-        # ── Bước 1: Xác định ngón nào đang duỗi và ngón cái co ─────────
+        # ── Xác định ngón nào đang duỗi và ngón cái co ─────────
         fingers_extended = self._get_extended_fingers(landmarks)
         num_extended = sum(fingers_extended)
 
@@ -171,7 +170,7 @@ class GestureEngine:
 
         thumb_curled = self._is_thumb_curled(landmarks)
 
-        # ── Bước 2: Phát hiện 5 ngón duỗi → DỪNG CHƯƠNG TRÌNH ──────────
+        # --- Phát hiện 5 ngón duỗi → DỪNG CHƯƠNG TRÌNH ---
         if num_extended == 5:
             self._stop_frame_count += 1
             if self._stop_frame_count >= self.STOP_FRAME_THRESHOLD:
@@ -183,10 +182,11 @@ class GestureEngine:
         else:
             self._stop_frame_count = 0
 
-        # ── Bước 3: Phát hiện nắm đấm (0 ngón duỗi) → ĐỨNG YÊN / CUỘN ─
-        if num_extended == 0:
-            # Bắt đầu hoặc tiếp tục đếm thời gian giữ nắm đấm
+        # --- Phát hiện nắm đấm (4 ngón dài co) → ĐỨNG YÊN / CUỘN ---
+        # Bỏ qua ngón cái, chỉ cần 4 ngón dài co là đủ. Không return sớm để click detection vẫn chạy.
+        if not any(fingers_extended[1:]):
             if self._scroll_hold_start == 0.0:
+                # Bắt đầu đếm thời gian giữ nắm đấm
                 self._scroll_hold_start = current_time
                 logger.debug(f"Bắt đầu đếm giữ nắm đấm ({self.SCROLL_HOLD_TIME}s)")
             elif current_time - self._scroll_hold_start >= self.SCROLL_HOLD_TIME:
@@ -199,23 +199,18 @@ class GestureEngine:
                 self._prev_thumb_curled = False
                 self._index_curled_time = 0.0
                 self._thumb_extended_time = 0.0
-                return result
-
-            # Chưa đủ 2 giây → đứng yên, không di chuyển chuột
+            else:
+                # Chưa đủ 2 giây → đứng yên, không di chuyển chuột
+                result["mode"] = GestureMode.HOVER
+                self._current_mode = GestureMode.HOVER
+                result["fist_hold"] = True
+        else:
+            # Không còn nắm đấm → đặt lại bộ đếm giữ, về chế độ rê chuột
+            self._scroll_hold_start = 0.0
             result["mode"] = GestureMode.HOVER
             self._current_mode = GestureMode.HOVER
-            result["fist_hold"] = True
-            return result
-        else:
-            # Không còn nắm đấm → đặt lại bộ đếm giữ
-            self._scroll_hold_start = 0.0
 
-        # ── Bước 4: Chế độ rê chuột (HOVER) ────────────────────────────
-        # Mặc định có bàn tay là rê chuột
-        result["mode"] = GestureMode.HOVER
-        self._current_mode = GestureMode.HOVER
-
-        # ── Phát hiện click trái qua co/duỗi ngón trỏ ─────────────────
+        # --- Phát hiện click trái qua co/duỗi ngón trỏ ---
         # Ngón trỏ: đang duỗi → co → duỗi trong QUICK_CLICK_WINDOW = click
         if self._prev_index_ext and not index_ext:
             # Ngón trỏ vừa co lại → ghi nhận thời điểm
@@ -231,7 +226,7 @@ class GestureEngine:
                 else:
                     self._index_curled_time = 0.0
 
-        # ── Phát hiện click trái qua co/duỗi ngón cái (thay thế) ─────
+        # --- Phát hiện click phải qua co/duỗi ngón cái (thay thế) ---
         # Chỉ hoạt động khi ngón trỏ đang duỗi
         # Ngón cái: đang co → duỗi → co trong QUICK_CLICK_WINDOW = click
         if index_ext:
@@ -255,7 +250,7 @@ class GestureEngine:
             # Nếu ngón trỏ không duỗi, đặt lại trạng thái ngón cái
             self._thumb_extended_time = 0.0
 
-        # ── Cập nhật trạng thái trước đó ───────────────────────────────
+        # ── Cập nhật trạng thái trước đó ────
         self._prev_index_ext = index_ext
         self._prev_thumb_curled = thumb_curled
 
@@ -330,11 +325,8 @@ class GestureEngine:
             extended.append(ratio > self.FINGER_EXTEND_RATIO)
 
         return extended
-
-    # ────────────────────────────────────────────────────────────────────
-    # PHÁT HIỆN NGÓN CÁI CO
-    # ────────────────────────────────────────────────────────────────────
-
+    
+    #--- Ngón cái co/duỗi "đo khoảng cách từ đầu ngón cái đến khớp ngón trỏ để click phải "
     def _is_thumb_curled(self, landmarks: List[Tuple[int, int]]) -> bool:
         """Xác định ngón cái có đang co lại hay không."""
         thumb_tip = landmarks[self.THUMB_TIP]

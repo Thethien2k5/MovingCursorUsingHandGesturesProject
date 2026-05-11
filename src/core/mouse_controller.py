@@ -21,7 +21,7 @@ class OneEuroFilter:
     Tham khảo: "1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems"
     """
 
-    def __init__(self, freq: float = 120.0, mincutoff: float = 1.0, beta: float = 0.5, dcutoff: float = 1.0) -> None:
+    def __init__(self, freq: float = 120.0, mincutoff: float = 0.8, beta: float = 0.05, dcutoff: float = 0.8) -> None:
         """
         Khởi tạo Bộ lọc One Euro.
 
@@ -147,8 +147,8 @@ class MouseController:
         self.smoothing_enabled = smoothing_enabled
 
         # Khởi tạo Bộ lọc One Euro cho tọa độ X và Y
-        self.x_filter = OneEuroFilter(freq=120.0, mincutoff=1.0, beta=0.5, dcutoff=1.0)
-        self.y_filter = OneEuroFilter(freq=120.0, mincutoff=1.0, beta=0.5, dcutoff=1.0)
+        self.x_filter = OneEuroFilter(freq=60.0, mincutoff=0.01, beta=0.005, dcutoff=1.0)
+        self.y_filter = OneEuroFilter(freq=60.0, mincutoff=0.01, beta=0.005, dcutoff=1.0)
 
         # Kích thước khung hình camera (sẽ được đặt ở lần sử dụng đầu tiên)
         self.camera_width: Optional[int] = None
